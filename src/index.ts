@@ -45,6 +45,28 @@ let webhookServer: Server | null = null;
 const DEFAULT_ACCOUNT_ID = "default";
 
 // ---------------------------------------------------------------------------
+// Debug helper
+//
+// trace() emits at log.debug normally (only visible when the OpenClaw gateway
+// is at debug log level) but escalates to log.info when WHATSAPP_CLOUD_DEBUG=1
+// is set in the environment. This lets operators turn on plugin-specific
+// verbose traces in prod without raising the global gateway log level.
+// ---------------------------------------------------------------------------
+
+const WACLOUD_DEBUG = (() => {
+  const v = (process.env.WHATSAPP_CLOUD_DEBUG ?? "").toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+})();
+
+function trace(log: Logger, message: string): void {
+  if (WACLOUD_DEBUG) {
+    log.info?.(message);
+  } else {
+    log.debug?.(message);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Config resolution
 // ---------------------------------------------------------------------------
 
@@ -275,13 +297,19 @@ const whatsappCloudChannel = {
         // uploaded to /media first to obtain a media_id, then sent via
         // {id}. Otherwise Meta rejects with "(#100) Param image.link is
         // not a valid URI".
-        const mediaArg = isHttpUrl(mediaUrl)
-          ? { link: mediaUrl, caption: text || undefined }
-          : {
-              id: await uploadMediaFromPath(config, mediaUrl, guessMimeFromPath(mediaUrl), log),
-              caption: text || undefined,
-            };
+        const usesUpload = !isHttpUrl(mediaUrl);
+        trace(log, `[whatsapp-cloud] outbound.sendMedia to=${to} mediaUrl=${mediaUrl} mode=${usesUpload ? "upload" : "link"}`);
+        let mediaArg: { link?: string; id?: string; caption?: string };
+        if (usesUpload) {
+          const mime = guessMimeFromPath(mediaUrl);
+          const id = await uploadMediaFromPath(config, mediaUrl, mime, log);
+          trace(log, `[whatsapp-cloud] outbound.sendMedia uploaded ${mediaUrl} (${mime}) -> media_id=${id}`);
+          mediaArg = { id, caption: text || undefined };
+        } else {
+          mediaArg = { link: mediaUrl, caption: text || undefined };
+        }
         const result = await sendMedia(config, to, "image", mediaArg, log);
+        trace(log, `[whatsapp-cloud] outbound.sendMedia result ok=${result.ok} messageId=${result.messageId ?? "n/a"}${result.ok ? "" : " error=" + result.error}`);
         if (!result.ok) {
           throw new Error(`WhatsApp Cloud API media send failed: ${result.error}`);
         }
@@ -350,7 +378,16 @@ const whatsappCloudChannel = {
               CommandBody: message.text,
               BodyForCommands: message.text,
               From: message.from,
-              To: config.phoneNumberId,
+              // To is the OpenClaw "channel/chat identifier". For direct DMs
+              // in WhatsApp the conversation is identified by the user (the
+              // other party), not by the bot's phoneNumberId. If To is set to
+              // phoneNumberId, OpenClaw's `message send` tool falls back to
+              // currentChannelId (= ctx.To) as the recipient when the agent
+              // omits an explicit target → the bot ends up sending to itself
+              // and Meta rejects with #131009 ("Parameter value is not valid").
+              // ToChannel preserves the bot's id for any consumer that needs it.
+              To: message.from,
+              ToChannel: config.phoneNumberId,
               SessionKey: `whatsapp-cloud:${message.from}`,
               AccountId: account.accountId,
               MessageSid: message.messageId,
@@ -391,14 +428,19 @@ const whatsappCloudChannel = {
                   // by skills like python-analysis (charts saved under
                   // ~/.openclaw/workspace/charts/).
                   const sendOne = async (mediaRef: string) => {
-                    if (isHttpUrl(mediaRef)) {
-                      await sendMedia(config, message.from, "image", { link: mediaRef }, log);
+                    const usesUpload = !isHttpUrl(mediaRef);
+                    trace(log, `[whatsapp-cloud] deliver.sendOne to=${message.from} mediaRef=${mediaRef} mode=${usesUpload ? "upload" : "link"}`);
+                    if (!usesUpload) {
+                      const r = await sendMedia(config, message.from, "image", { link: mediaRef }, log);
+                      trace(log, `[whatsapp-cloud] deliver.sendOne link result ok=${r.ok} messageId=${r.messageId ?? "n/a"}${r.ok ? "" : " error=" + r.error}`);
                       return;
                     }
                     try {
                       const mime = guessMimeFromPath(mediaRef);
                       const id = await uploadMediaFromPath(config, mediaRef, mime, log);
-                      await sendMedia(config, message.from, "image", { id }, log);
+                      trace(log, `[whatsapp-cloud] deliver.sendOne uploaded ${mediaRef} (${mime}) -> media_id=${id}`);
+                      const r = await sendMedia(config, message.from, "image", { id }, log);
+                      trace(log, `[whatsapp-cloud] deliver.sendOne id result ok=${r.ok} messageId=${r.messageId ?? "n/a"}${r.ok ? "" : " error=" + r.error}`);
                     } catch (err) {
                       log.error?.(`[whatsapp-cloud] media send failed for "${mediaRef}": ${err}`);
                       throw err;
