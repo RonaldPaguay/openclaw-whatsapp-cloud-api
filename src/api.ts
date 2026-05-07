@@ -270,9 +270,19 @@ export function guessMimeFromPath(filePath: string): string {
     case "mp4": return "video/mp4";
     case "3gp": return "video/3gpp";
     case "mp3": return "audio/mpeg";
-    case "ogg": return "audio/ogg";
+    case "ogg":
+    case "opus": return "audio/ogg";
     case "amr": return "audio/amr";
+    case "aac": return "audio/aac";
+    case "m4a": return "audio/mp4";
     case "pdf": return "application/pdf";
+    case "txt": return "text/plain";
+    case "doc": return "application/msword";
+    case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case "xls": return "application/vnd.ms-excel";
+    case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case "ppt": return "application/vnd.ms-powerpoint";
+    case "pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     default: return "application/octet-stream";
   }
 }
