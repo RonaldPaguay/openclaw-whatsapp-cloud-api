@@ -256,6 +256,21 @@ export function isHttpUrl(value: string): boolean {
 }
 
 /**
+ * Map a MIME type to the Meta `type` field used in the messages payload.
+ * Meta routes rendering on the WhatsApp client based on this kind:
+ * sending an xlsx as `type: image` makes Meta accept the upload but the
+ * client never displays it (no failure status either).
+ */
+export function mediaKindFromMime(
+  mime: string,
+): "image" | "audio" | "video" | "document" {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  return "document";
+}
+
+/**
  * Guess MIME type from file extension. Meta only accepts a fixed set of
  * MIME types per media kind; this covers the common ones.
  */
