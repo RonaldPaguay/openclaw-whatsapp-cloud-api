@@ -17,6 +17,7 @@ import {
   uploadMediaFromPath,
   isHttpUrl,
   guessMimeFromPath,
+  mediaKindFromMime,
 } from "./api.js";
 import { startWebhookServer } from "./webhook.js";
 import { runSetupWizard, validateConfig } from "./setup.js";
@@ -298,17 +299,22 @@ const whatsappCloudChannel = {
         // {id}. Otherwise Meta rejects with "(#100) Param image.link is
         // not a valid URI".
         const usesUpload = !isHttpUrl(mediaUrl);
-        trace(log, `[whatsapp-cloud] outbound.sendMedia to=${to} mediaUrl=${mediaUrl} mode=${usesUpload ? "upload" : "link"}`);
-        let mediaArg: { link?: string; id?: string; caption?: string };
+        const mime = guessMimeFromPath(mediaUrl);
+        const kind = mediaKindFromMime(mime);
+        const filename = mediaUrl.split(/[\\/]/).pop() ?? "file";
+        trace(log, `[whatsapp-cloud] outbound.sendMedia to=${to} mediaUrl=${mediaUrl} kind=${kind} mode=${usesUpload ? "upload" : "link"}`);
+        let mediaArg: { link?: string; id?: string; caption?: string; filename?: string };
         if (usesUpload) {
-          const mime = guessMimeFromPath(mediaUrl);
           const id = await uploadMediaFromPath(config, mediaUrl, mime, log);
           trace(log, `[whatsapp-cloud] outbound.sendMedia uploaded ${mediaUrl} (${mime}) -> media_id=${id}`);
           mediaArg = { id, caption: text || undefined };
         } else {
           mediaArg = { link: mediaUrl, caption: text || undefined };
         }
-        const result = await sendMedia(config, to, "image", mediaArg, log);
+        if (kind === "document") {
+          mediaArg.filename = filename;
+        }
+        const result = await sendMedia(config, to, kind, mediaArg, log);
         trace(log, `[whatsapp-cloud] outbound.sendMedia result ok=${result.ok} messageId=${result.messageId ?? "n/a"}${result.ok ? "" : " error=" + result.error}`);
         if (!result.ok) {
           throw new Error(`WhatsApp Cloud API media send failed: ${result.error}`);
@@ -429,17 +435,23 @@ const whatsappCloudChannel = {
                   // ~/.openclaw/workspace/charts/).
                   const sendOne = async (mediaRef: string) => {
                     const usesUpload = !isHttpUrl(mediaRef);
-                    trace(log, `[whatsapp-cloud] deliver.sendOne to=${message.from} mediaRef=${mediaRef} mode=${usesUpload ? "upload" : "link"}`);
+                    const mime = guessMimeFromPath(mediaRef);
+                    const kind = mediaKindFromMime(mime);
+                    const filename = mediaRef.split(/[\\/]/).pop() ?? "file";
+                    trace(log, `[whatsapp-cloud] deliver.sendOne to=${message.from} mediaRef=${mediaRef} kind=${kind} mode=${usesUpload ? "upload" : "link"}`);
                     if (!usesUpload) {
-                      const r = await sendMedia(config, message.from, "image", { link: mediaRef }, log);
+                      const arg: { link: string; filename?: string } = { link: mediaRef };
+                      if (kind === "document") arg.filename = filename;
+                      const r = await sendMedia(config, message.from, kind, arg, log);
                       trace(log, `[whatsapp-cloud] deliver.sendOne link result ok=${r.ok} messageId=${r.messageId ?? "n/a"}${r.ok ? "" : " error=" + r.error}`);
                       return;
                     }
                     try {
-                      const mime = guessMimeFromPath(mediaRef);
                       const id = await uploadMediaFromPath(config, mediaRef, mime, log);
                       trace(log, `[whatsapp-cloud] deliver.sendOne uploaded ${mediaRef} (${mime}) -> media_id=${id}`);
-                      const r = await sendMedia(config, message.from, "image", { id }, log);
+                      const arg: { id: string; filename?: string } = { id };
+                      if (kind === "document") arg.filename = filename;
+                      const r = await sendMedia(config, message.from, kind, arg, log);
                       trace(log, `[whatsapp-cloud] deliver.sendOne id result ok=${r.ok} messageId=${r.messageId ?? "n/a"}${r.ok ? "" : " error=" + r.error}`);
                     } catch (err) {
                       log.error?.(`[whatsapp-cloud] media send failed for "${mediaRef}": ${err}`);
