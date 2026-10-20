@@ -20,6 +20,7 @@ import {
   mediaKindFromMime,
 } from "./api.js";
 import { startWebhookServer } from "./webhook.js";
+import { buildSessionKey, stageInboundMedia } from "./inbound.js";
 import { runSetupWizard, validateConfig } from "./setup.js";
 import { whatsappCloudOnboardingAdapter } from "./onboarding.js";
 import type { WhatsAppCloudConfig, Logger } from "./types.js";
@@ -399,7 +400,7 @@ const whatsappCloudChannel = {
               // ToChannel preserves the bot's id for any consumer that needs it.
               To: message.from,
               ToChannel: config.phoneNumberId,
-              SessionKey: `whatsapp-cloud:${message.from}`,
+              SessionKey: buildSessionKey(runtime, freshCfg, account.accountId, message.from),
               AccountId: account.accountId,
               MessageSid: message.messageId,
               ChatType: "direct",
@@ -424,6 +425,13 @@ const whatsappCloudChannel = {
 
             if (message.quotedMessageId) {
               msgCtx.ReplyToId = message.quotedMessageId;
+            }
+
+            // Attachments (document/image/audio/video): stage the file so the
+            // agent receives it, not just the "[📄 Document: ...]" placeholder.
+            if (message.media) {
+              const media = await stageInboundMedia(runtime, config, message.media, message.messageId, log);
+              if (media) msgCtx.media = media;
             }
 
             // Dispatch via OpenClaw's reply system
