@@ -24,7 +24,12 @@ import { runSetupWizard, validateConfig } from "./setup.js";
 import { whatsappCloudOnboardingAdapter } from "./onboarding.js";
 import type { WhatsAppCloudConfig, Logger } from "./types.js";
 import { CONFIG_DEFAULTS } from "./types.js";
-import { setWhatsAppCloudRuntime, getWhatsAppCloudRuntime } from "./runtime.js";
+import {
+  setWhatsAppCloudRuntime,
+  getWhatsAppCloudRuntime,
+  loadRuntimeConfig,
+  writeRuntimeConfig,
+} from "./runtime.js";
 
 // ---------------------------------------------------------------------------
 // Account resolution types
@@ -375,7 +380,7 @@ const whatsappCloudChannel = {
             sendTypingIndicator(config, message.messageId, log).catch(() => {});
 
             // Load fresh config for dispatch
-            const freshCfg = await runtime.config.loadConfig();
+            const freshCfg = await loadRuntimeConfig(runtime);
 
             // Build MsgContext (OpenClaw's standard inbound message format)
             const msgCtx: Record<string, any> = {
@@ -411,6 +416,10 @@ const whatsappCloudChannel = {
               // forces CommandAuthorized=false and the dispatcher silently
               // drops all slash commands.
               CommandAuthorized: true,
+              // OpenClaw >= 2026.10: prueba de que el canal ya admitio al
+              // remitente (el webhook filtra por allowFrom). Versiones
+              // anteriores ignoran el campo.
+              InboundAccessAuthorized: true,
             };
 
             if (message.quotedMessageId) {
@@ -459,13 +468,17 @@ const whatsappCloudChannel = {
                     }
                   };
 
-                  if (payload.mediaUrl) {
-                    await sendOne(payload.mediaUrl);
-                  }
-                  if (payload.mediaUrls?.length) {
-                    for (const url of payload.mediaUrls) {
-                      await sendOne(url);
-                    }
+                  // mediaUrls suele repetir a mediaUrl (normalizador de
+                  // OpenClaw): unir ambos y enviar cada adjunto una sola vez.
+                  const mediaRefs: string[] = [
+                    ...new Set(
+                      [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter(
+                        (u): u is string => Boolean(u)
+                      )
+                    ),
+                  ];
+                  for (const url of mediaRefs) {
+                    await sendOne(url);
                   }
                 },
                 onReplyStart: () => {
@@ -534,7 +547,7 @@ const whatsappCloudChannel = {
           "whatsapp-cloud": rest,
         };
 
-        await getWhatsAppCloudRuntime().config.writeConfigFile(nextCfg);
+        await writeRuntimeConfig(nextCfg);
       }
 
       return {
@@ -630,7 +643,7 @@ const plugin = {
                 // Save via runtime config
                 try {
                   const runtime = getWhatsAppCloudRuntime();
-                  const currentCfg = await runtime.config.loadConfig();
+                  const currentCfg = await loadRuntimeConfig(runtime);
                   const nextCfg = {
                     ...currentCfg,
                     channels: {
@@ -649,7 +662,7 @@ const plugin = {
                       },
                     },
                   };
-                  await runtime.config.writeConfigFile(nextCfg);
+                  await writeRuntimeConfig(nextCfg, runtime);
                   log.info("[whatsapp-cloud] Configuration saved to openclaw.json");
                   console.log("\n  Then: openclaw gateway restart\n");
                 } catch {
@@ -681,7 +694,7 @@ const plugin = {
 
               try {
                 const runtime = getWhatsAppCloudRuntime();
-                const cfg = await runtime.config.loadConfig();
+                const cfg = await loadRuntimeConfig(runtime);
                 const config = resolveConfig(cfg);
                 const validation = validateConfig(config);
                 if (!validation.valid) {
@@ -704,7 +717,7 @@ const plugin = {
             .action(async (phone: string) => {
               try {
                 const runtime = getWhatsAppCloudRuntime();
-                const cfg = await runtime.config.loadConfig();
+                const cfg = await loadRuntimeConfig(runtime);
                 const config = resolveConfig(cfg);
 
                 if (!config.accessToken || !config.phoneNumberId) {
